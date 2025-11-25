@@ -1,0 +1,59 @@
+name: Build and Push Docker image to ECR
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Determine registry and image tag
+        id: vars
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          IMAGE_TAG="$ECR_REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA}"
+          echo "ECR_REGISTRY=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Build and push image (build-push-action)
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.vars.outputs.IMAGE_TAG }}
+
+      - name: Push latest tag (on main)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGION=${{ secrets.AWS_REGION }}
+          REPO=${{ secrets.ECR_REPOSITORY }}
+          ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+          SHA=${{ github.sha }}
+          IMAGE_TAG="$ECR_REGISTRY/$REPO:$SHA"
+          LATEST_TAG="$ECR_REGISTRY/$REPO:latest"
+          docker pull "$IMAGE_TAG"
+          docker tag "$IMAGE_TAG" "$LATEST_TAG"
+          docker push "$LATEST_TAG"
